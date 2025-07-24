@@ -35,6 +35,7 @@ export default function CommutePage() {
   const [mapLoaded, setMapLoaded] = useState(false)
   const [searchCoordinates, setSearchCoordinates] = useState<{ lat: number; lng: number } | null>(null)
   const [markers, setMarkers] = useState<any[]>([])
+  const [mounted, setMounted] = useState(false)
   const mapRef = useRef<HTMLDivElement>(null)
 
   // Mock data with real Metro North stations
@@ -75,8 +76,16 @@ export default function CommutePage() {
     },
   ]
 
+  // Handle component mounting
+  useEffect(() => {
+    setMounted(true)
+    return () => setMounted(false)
+  }, [])
+
   // Initialize Google Maps
   useEffect(() => {
+    if (!mounted) return
+
     const loadGoogleMaps = () => {
       // Check if API key is available
       const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
@@ -87,7 +96,8 @@ export default function CommutePage() {
 
       // Check if already loaded
       if (window.google) {
-        initializeMap()
+        // Add a small delay to ensure DOM is ready
+        setTimeout(initializeMap, 100)
         return
       }
 
@@ -99,22 +109,33 @@ export default function CommutePage() {
 
       script.onload = () => {
         console.log("Google Maps API loaded successfully")
-        initializeMap()
+        // Add a small delay to ensure DOM is ready
+        setTimeout(initializeMap, 100)
       }
 
       script.onerror = (error) => {
         console.error("Failed to load Google Maps API:", error)
         console.error("API Key:", apiKey ? "Present" : "Missing")
+        setMapLoaded(false)
       }
 
       document.head.appendChild(script)
     }
 
     const initializeMap = () => {
-      if (!mapRef.current || !window.google) return
+      if (!mapRef.current || !window.google) {
+        console.log("Map ref or Google not available yet")
+        return
+      }
 
       try {
         console.log("Initializing Google Maps...")
+
+        // Check if mapRef.current is still a valid DOM element
+        if (!mapRef.current.isConnected) {
+          console.error("Map container is not connected to DOM")
+          return
+        }
 
         const mapInstance = new window.google.maps.Map(mapRef.current, {
           center: { lat: 40.9176, lng: -73.7004 }, // Westchester County
@@ -142,11 +163,12 @@ export default function CommutePage() {
         console.log("Google Maps initialized successfully")
       } catch (error) {
         console.error("Error initializing Google Maps:", error)
+        setMapLoaded(false)
       }
     }
 
     loadGoogleMaps()
-  }, [])
+  }, [mounted])
 
   const clearMarkersAndDirections = () => {
     // Clear existing markers
@@ -211,57 +233,68 @@ export default function CommutePage() {
   }
 
   const showRouteOnMap = (option: CommuteOption, searchCoords: { lat: number; lng: number }) => {
-    if (!map || !directionsService) return
+    if (!map || !directionsService) {
+      console.warn("Map or directions service not available")
+      return
+    }
 
-    // Clear previous directions but keep markers
-    directionsRenderers.forEach((renderer) => renderer.setMap(null))
-    setDirectionsRenderers([])
+    try {
+      // Clear previous directions but keep markers
+      directionsRenderers.forEach((renderer) => renderer.setMap(null))
+      setDirectionsRenderers([])
 
-    // Create driving route to station
-    const drivingRenderer = new window.google.maps.DirectionsRenderer({
-      polylineOptions: {
-        strokeColor: "#4285F4",
-        strokeWeight: 4,
-        strokeOpacity: 0.8,
-      },
-      suppressMarkers: false,
-      markerOptions: {
-        icon: {
-          url:
-            "data:image/svg+xml;charset=UTF-8," +
-            encodeURIComponent(`
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="12" cy="12" r="8" fill="#4285F4"/>
-              <path d="M12 8v4l3 3" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-            </svg>
-          `),
-          scaledSize: new window.google.maps.Size(20, 20),
+      // Create driving route to station
+      const drivingRenderer = new window.google.maps.DirectionsRenderer({
+        polylineOptions: {
+          strokeColor: "#4285F4",
+          strokeWeight: 4,
+          strokeOpacity: 0.8,
         },
-      },
-    })
+        suppressMarkers: false,
+        markerOptions: {
+          icon: {
+            url:
+              "data:image/svg+xml;charset=UTF-8," +
+              encodeURIComponent(`
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="12" cy="12" r="8" fill="#4285F4"/>
+                <path d="M12 8v4l3 3" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+            `),
+            scaledSize: new window.google.maps.Size(20, 20),
+          },
+        },
+      })
 
-    drivingRenderer.setMap(map)
+      drivingRenderer.setMap(map)
 
-    directionsService.route(
-      {
-        origin: searchCoords,
-        destination: option.coordinates,
-        travelMode: window.google.maps.TravelMode.DRIVING,
-      },
-      (result: any, status: any) => {
-        if (status === "OK") {
-          drivingRenderer.setDirections(result)
-        } else {
-          console.error("Directions request failed:", status)
-        }
-      },
-    )
+      directionsService.route(
+        {
+          origin: searchCoords,
+          destination: option.coordinates,
+          travelMode: window.google.maps.TravelMode.DRIVING,
+        },
+        (result: any, status: any) => {
+          if (status === "OK") {
+            drivingRenderer.setDirections(result)
+          } else {
+            console.error("Directions request failed:", status)
+          }
+        },
+      )
 
-    setDirectionsRenderers([drivingRenderer])
+      setDirectionsRenderers([drivingRenderer])
+    } catch (error) {
+      console.error("Error showing route on map:", error)
+    }
   }
 
   const handleSearch = async () => {
     if (!searchAddress.trim()) return
+    if (!mapLoaded || !geocoder) {
+      console.warn("Maps not ready yet")
+      return
+    }
 
     setIsLoading(true)
 
@@ -276,13 +309,23 @@ export default function CommutePage() {
       // Calculate real driving times to each station
       const updatedOptions = await Promise.all(
         mockCommuteData.map(async (option) => {
-          const realDriveTime = await calculateDrivingTime(coordinates, option.coordinates)
-          return {
-            ...option,
-            driveTime: realDriveTime,
-            totalTime: showNicoleOffice
-              ? realDriveTime + option.trainTime + (option.subwayTime || 0)
-              : realDriveTime + option.trainTime,
+          try {
+            const realDriveTime = await calculateDrivingTime(coordinates, option.coordinates)
+            return {
+              ...option,
+              driveTime: realDriveTime,
+              totalTime: showNicoleOffice
+                ? realDriveTime + option.trainTime + (option.subwayTime || 0)
+                : realDriveTime + option.trainTime,
+            }
+          } catch (error) {
+            console.error(`Error calculating drive time for ${option.station}:`, error)
+            return {
+              ...option,
+              totalTime: showNicoleOffice
+                ? option.driveTime + option.trainTime + (option.subwayTime || 0)
+                : option.driveTime + option.trainTime,
+            }
           }
         }),
       )
@@ -291,48 +334,52 @@ export default function CommutePage() {
 
       // Add search location marker
       if (map) {
-        const searchMarker = new window.google.maps.Marker({
-          position: coordinates,
-          map: map,
-          title: searchAddress,
-          icon: {
-            url:
-              "data:image/svg+xml;charset=UTF-8," +
-              encodeURIComponent(`
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#EA4335"/>
-                <circle cx="12" cy="9" r="2.5" fill="white"/>
-              </svg>
-            `),
-            scaledSize: new window.google.maps.Size(32, 32),
-          },
-        })
-
-        // Add station markers
-        const stationMarkers = updatedOptions.map((option) => {
-          return new window.google.maps.Marker({
-            position: option.coordinates,
+        try {
+          const searchMarker = new window.google.maps.Marker({
+            position: coordinates,
             map: map,
-            title: `${option.station} Station - ${option.totalTime} min total`,
+            title: searchAddress,
             icon: {
               url:
                 "data:image/svg+xml;charset=UTF-8," +
                 encodeURIComponent(`
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <circle cx="12" cy="12" r="10" fill="#1976D2"/>
-                  <path d="M12 6v6l4 2" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#EA4335"/>
+                  <circle cx="12" cy="9" r="2.5" fill="white"/>
                 </svg>
               `),
-              scaledSize: new window.google.maps.Size(24, 24),
+              scaledSize: new window.google.maps.Size(32, 32),
             },
           })
-        })
 
-        setMarkers([searchMarker, ...stationMarkers])
+          // Add station markers
+          const stationMarkers = updatedOptions.map((option) => {
+            return new window.google.maps.Marker({
+              position: option.coordinates,
+              map: map,
+              title: `${option.station} Station - ${option.totalTime} min total`,
+              icon: {
+                url:
+                  "data:image/svg+xml;charset=UTF-8," +
+                  encodeURIComponent(`
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="12" cy="12" r="10" fill="#1976D2"/>
+                    <path d="M12 6v6l4 2" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                  </svg>
+                `),
+                scaledSize: new window.google.maps.Size(24, 24),
+              },
+            })
+          })
 
-        // Center map on search location
-        map.setCenter(coordinates)
-        map.setZoom(12)
+          setMarkers([searchMarker, ...stationMarkers])
+
+          // Center map on search location
+          map.setCenter(coordinates)
+          map.setZoom(12)
+        } catch (mapError) {
+          console.error("Error adding markers to map:", mapError)
+        }
       }
     } catch (error) {
       console.error("Error during search:", error)
@@ -511,6 +558,9 @@ export default function CommutePage() {
               <div className="text-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
                 <p className="text-gray-600">Loading Google Maps...</p>
+                <p className="text-sm text-gray-400 mt-1">
+                  API Key: {process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ? 'Configured' : 'Missing'}
+                </p>
               </div>
             </div>
           )}
