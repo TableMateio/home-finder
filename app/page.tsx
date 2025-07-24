@@ -156,8 +156,8 @@ export default function CommutePage() {
                     <div
                       key={index}
                       className={`p-4 rounded-lg border cursor-pointer transition-all ${hoveredOption === index
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-gray-300'
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-gray-200 hover:border-gray-300'
                         }`}
                       onMouseEnter={() => setHoveredOption(index)}
                       onMouseLeave={() => setHoveredOption(null)}
@@ -212,7 +212,7 @@ export default function CommutePage() {
         </div>
 
         {/* Debug Panel */}
-        <DebugPanel />
+        {/* <DebugPanel /> */}
       </div>
     </ErrorBoundary>
   )
