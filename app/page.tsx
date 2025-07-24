@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { ErrorReporter } from "@/lib/error-reporting"
+import { DebugPanel } from "@/components/debug-panel"
 
 declare global {
   interface Window {
@@ -490,6 +491,9 @@ export default function CommutePage() {
           />
         </ErrorBoundary>
       </div>
+
+      {/* Debug Panel */}
+      <DebugPanel />
     </div>
   )
 }
