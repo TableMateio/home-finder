@@ -1,26 +1,20 @@
 "use client"
 
 import type React from "react"
-import dynamic from "next/dynamic"
-import { useState, useEffect, useRef } from "react"
-import { Search, Train, Car, Building2 } from "lucide-react"
+import { useState, useEffect, useRef, useCallback } from "react"
+import { Search, Train, Car, Building2, AlertCircle } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { ErrorBoundary } from "@/components/error-boundary"
+import { ErrorReporter } from "@/lib/error-reporting"
 
-// Dynamically import the map component to prevent SSR issues
-const DynamicMapComponent = dynamic(() => Promise.resolve(MapComponent), {
-  ssr: false,
-  loading: () => (
-    <div className="w-full h-full flex items-center justify-center bg-gray-100">
-      <div className="text-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-        <p className="text-gray-600">Loading Map...</p>
-      </div>
-    </div>
-  )
-})
+declare global {
+  interface Window {
+    google: any
+  }
+}
 
 interface CommuteOption {
   id: string
@@ -35,35 +29,115 @@ interface CommuteOption {
   coordinates: { lat: number; lng: number }
 }
 
-// Separate map component to isolate Google Maps logic
-function MapComponent({
+// Simple Google Maps wrapper that doesn't rely on external libraries
+function GoogleMapWrapper({
+  children,
+  onLoad,
+  onError
+}: {
+  children?: React.ReactNode
+  onLoad?: () => void
+  onError?: (error: any) => void
+}) {
+  const [isLoaded, setIsLoaded] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const errorReporter = ErrorReporter.getInstance()
+
+  useEffect(() => {
+    const loadGoogleMaps = async () => {
+      try {
+        const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
+        if (!apiKey) {
+          throw new Error("Google Maps API key not found")
+        }
+
+        // Check if already loaded
+        if (window.google?.maps) {
+          setIsLoaded(true)
+          onLoad?.()
+          return
+        }
+
+        // Create and load script
+        const script = document.createElement('script')
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry&loading=async`
+        script.async = true
+        script.defer = true
+
+        script.onload = () => {
+          console.log('Google Maps loaded successfully')
+          setIsLoaded(true)
+          onLoad?.()
+        }
+
+        script.onerror = (error) => {
+          const errorMsg = 'Failed to load Google Maps'
+          console.error(errorMsg, error)
+          setLoadError(errorMsg)
+          errorReporter.reportMapError('Script Loading', error)
+          onError?.(error)
+        }
+
+        document.head.appendChild(script)
+      } catch (error) {
+        const errorMsg = `Google Maps initialization error: ${error}`
+        console.error(errorMsg)
+        setLoadError(errorMsg)
+        errorReporter.reportMapError('Initialization', error)
+        onError?.(error)
+      }
+    }
+
+    loadGoogleMaps()
+  }, [onLoad, onError])
+
+  if (loadError) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-yellow-50 border border-yellow-200 rounded-lg">
+        <div className="text-center p-6">
+          <AlertCircle className="w-12 h-12 mx-auto text-yellow-600 mb-4" />
+          <h3 className="text-lg font-semibold text-yellow-800 mb-2">Map Loading Error</h3>
+          <p className="text-yellow-600 text-sm">{loadError}</p>
+          <p className="text-xs text-yellow-500 mt-2">Using fallback mode</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!isLoaded) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-gray-100">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading Google Maps...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return <>{children}</>
+}
+
+// Safer map component with extensive error handling
+function SafeMapComponent({
   searchAddress,
-  commuteOptions,
-  hoveredOption,
-  onOptionHover,
-  onOptionLeave,
+  onCommuteOptionsUpdate,
   showNicoleOffice,
-  onCommuteOptionsUpdate
+  onMapReady
 }: {
   searchAddress: string
-  commuteOptions: CommuteOption[]
-  hoveredOption: string | null
-  onOptionHover: (option: CommuteOption) => void
-  onOptionLeave: () => void
-  showNicoleOffice: boolean
   onCommuteOptionsUpdate: (options: CommuteOption[]) => void
+  showNicoleOffice: boolean
+  onMapReady: (ready: boolean) => void
 }) {
+  const mapRef = useRef<HTMLDivElement>(null)
   const [map, setMap] = useState<any>(null)
   const [geocoder, setGeocoder] = useState<any>(null)
   const [directionsService, setDirectionsService] = useState<any>(null)
-  const [directionsRenderers, setDirectionsRenderers] = useState<any[]>([])
-  const [mapLoaded, setMapLoaded] = useState(false)
-  const [searchCoordinates, setSearchCoordinates] = useState<{ lat: number; lng: number } | null>(null)
-  const [markers, setMarkers] = useState<any[]>([])
-  const [isClient, setIsClient] = useState(false)
-  const mapRef = useRef<HTMLDivElement>(null)
+  const [isMapReady, setIsMapReady] = useState(false)
+  const errorReporter = ErrorReporter.getInstance()
 
-  // Mock data with real Metro North stations
+  // Mock data
   const mockCommuteData: CommuteOption[] = [
     {
       id: "1",
@@ -101,83 +175,53 @@ function MapComponent({
     },
   ]
 
-  // Ensure this only runs on client
-  useEffect(() => {
-    setIsClient(true)
-  }, [])
-
-  // Initialize Google Maps only on client
-  useEffect(() => {
-    if (!isClient) return
-
-    const loadGoogleMaps = () => {
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
-      if (!apiKey) {
-        console.error("Google Maps API key is not configured")
-        return
-      }
-
-      if (window.google) {
-        setTimeout(initializeMap, 100)
-        return
-      }
-
-      const script = document.createElement("script")
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry`
-      script.async = true
-      script.defer = true
-
-      script.onload = () => {
-        console.log("Google Maps API loaded successfully")
-        setTimeout(initializeMap, 100)
-      }
-
-      script.onerror = (error) => {
-        console.error("Failed to load Google Maps API:", error)
-        setMapLoaded(false)
-      }
-
-      document.head.appendChild(script)
+  const initializeMap = useCallback(() => {
+    if (!mapRef.current || !window.google?.maps) {
+      errorReporter.reportMapError('Map Initialization', 'Map ref or Google Maps not available')
+      return
     }
-
-    const initializeMap = () => {
-      if (!mapRef.current || !window.google) return
-
-      try {
-        const mapInstance = new window.google.maps.Map(mapRef.current, {
-          center: { lat: 40.9176, lng: -73.7004 },
-          zoom: 10,
-          mapTypeControl: true,
-          streetViewControl: true,
-          fullscreenControl: true,
-        })
-
-        const geocoderInstance = new window.google.maps.Geocoder()
-        const directionsServiceInstance = new window.google.maps.DirectionsService()
-
-        setMap(mapInstance)
-        setGeocoder(geocoderInstance)
-        setDirectionsService(directionsServiceInstance)
-        setMapLoaded(true)
-
-        console.log("Google Maps initialized successfully")
-      } catch (error) {
-        console.error("Error initializing Google Maps:", error)
-        setMapLoaded(false)
-      }
-    }
-
-    loadGoogleMaps()
-  }, [isClient])
-
-  // Handle search function
-  const handleSearch = async () => {
-    if (!searchAddress.trim() || !geocoder || !map) return
 
     try {
+      console.log('Initializing map...')
+
+      const mapInstance = new window.google.maps.Map(mapRef.current, {
+        center: { lat: 40.9176, lng: -73.7004 },
+        zoom: 10,
+        mapTypeControl: true,
+        streetViewControl: true,
+        fullscreenControl: true,
+      })
+
+      const geocoderInstance = new window.google.maps.Geocoder()
+      const directionsServiceInstance = new window.google.maps.DirectionsService()
+
+      setMap(mapInstance)
+      setGeocoder(geocoderInstance)
+      setDirectionsService(directionsServiceInstance)
+      setIsMapReady(true)
+      onMapReady(true)
+
+      console.log('Map initialized successfully')
+    } catch (error) {
+      console.error('Map initialization failed:', error)
+      errorReporter.reportMapError('Map Creation', error)
+      onMapReady(false)
+    }
+  }, [onMapReady])
+
+  const handleSearch = useCallback(async () => {
+    if (!searchAddress.trim() || !geocoder || !map || !directionsService) {
+      console.warn('Search conditions not met')
+      return
+    }
+
+    try {
+      console.log('Starting search for:', searchAddress)
+
+      // Geocode address
       const coordinates = await new Promise<{ lat: number, lng: number }>((resolve, reject) => {
         geocoder.geocode({ address: searchAddress }, (results: any, status: any) => {
-          if (status === "OK" && results[0]) {
+          if (status === "OK" && results?.[0]) {
             const location = results[0].geometry.location
             resolve({ lat: location.lat(), lng: location.lng() })
           } else {
@@ -186,22 +230,13 @@ function MapComponent({
         })
       })
 
-      setSearchCoordinates(coordinates)
+      console.log('Geocoded coordinates:', coordinates)
 
-      // Clear previous markers
-      markers.forEach((marker) => marker.setMap(null))
-      setMarkers([])
-
-      // Calculate real driving times
+      // Calculate driving times with better error handling
       const updatedOptions = await Promise.all(
         mockCommuteData.map(async (option) => {
           try {
             const realDriveTime = await new Promise<number>((resolve) => {
-              if (!directionsService) {
-                resolve(option.driveTime)
-                return
-              }
-
               directionsService.route(
                 {
                   origin: coordinates,
@@ -209,11 +244,12 @@ function MapComponent({
                   travelMode: window.google.maps.TravelMode.DRIVING,
                 },
                 (result: any, status: any) => {
-                  if (status === "OK") {
+                  if (status === "OK" && result?.routes?.[0]?.legs?.[0]?.duration) {
                     const duration = result.routes[0].legs[0].duration.value / 60
                     resolve(Math.round(duration))
                   } else {
-                    resolve(option.driveTime)
+                    console.warn(`Directions failed for ${option.station}:`, status)
+                    resolve(option.driveTime) // fallback
                   }
                 }
               )
@@ -227,6 +263,7 @@ function MapComponent({
                 : realDriveTime + option.trainTime,
             }
           } catch (error) {
+            console.error(`Error calculating drive time for ${option.station}:`, error)
             return {
               ...option,
               totalTime: showNicoleOffice
@@ -239,110 +276,55 @@ function MapComponent({
 
       onCommuteOptionsUpdate(updatedOptions)
 
-      // Add markers
+      // Add markers safely
       try {
-        const searchMarker = new window.google.maps.Marker({
+        new window.google.maps.Marker({
           position: coordinates,
           map: map,
           title: searchAddress,
         })
 
-        const stationMarkers = updatedOptions.map((option) => {
-          return new window.google.maps.Marker({
+        updatedOptions.forEach((option) => {
+          new window.google.maps.Marker({
             position: option.coordinates,
             map: map,
-            title: `${option.station} Station - ${option.totalTime} min total`,
+            title: `${option.station} Station`,
           })
         })
 
-        setMarkers([searchMarker, ...stationMarkers])
         map.setCenter(coordinates)
         map.setZoom(12)
-      } catch (mapError) {
-        console.error("Error adding markers:", mapError)
+      } catch (markerError) {
+        console.error('Error adding markers:', markerError)
+        errorReporter.reportMapError('Marker Creation', markerError)
       }
-    } catch (error) {
-      console.error("Error during search:", error)
-    }
-  }
 
-  // Auto-search when address changes
+    } catch (error) {
+      console.error('Search failed:', error)
+      errorReporter.reportMapError('Search Operation', error)
+
+      // Fallback to mock data
+      const fallbackOptions = mockCommuteData.map((option) => ({
+        ...option,
+        totalTime: showNicoleOffice
+          ? option.driveTime + option.trainTime + (option.subwayTime || 0)
+          : option.driveTime + option.trainTime,
+      }))
+      onCommuteOptionsUpdate(fallbackOptions)
+    }
+  }, [searchAddress, geocoder, map, directionsService, showNicoleOffice, onCommuteOptionsUpdate])
+
+  // Auto-search when conditions are met
   useEffect(() => {
-    if (searchAddress && mapLoaded) {
+    if (searchAddress && isMapReady) {
       handleSearch()
     }
-  }, [searchAddress, mapLoaded, showNicoleOffice])
-
-  // Handle route display
-  useEffect(() => {
-    if (!hoveredOption || !searchCoordinates || !map || !directionsService) return
-
-    const option = commuteOptions.find(opt => opt.id === hoveredOption)
-    if (!option) return
-
-    try {
-      directionsRenderers.forEach((renderer) => renderer.setMap(null))
-      setDirectionsRenderers([])
-
-      const drivingRenderer = new window.google.maps.DirectionsRenderer({
-        polylineOptions: {
-          strokeColor: "#4285F4",
-          strokeWeight: 4,
-          strokeOpacity: 0.8,
-        },
-      })
-
-      drivingRenderer.setMap(map)
-
-      directionsService.route(
-        {
-          origin: searchCoordinates,
-          destination: option.coordinates,
-          travelMode: window.google.maps.TravelMode.DRIVING,
-        },
-        (result: any, status: any) => {
-          if (status === "OK") {
-            drivingRenderer.setDirections(result)
-          }
-        }
-      )
-
-      setDirectionsRenderers([drivingRenderer])
-    } catch (error) {
-      console.error("Error showing route:", error)
-    }
-  }, [hoveredOption, searchCoordinates, commuteOptions, map, directionsService])
-
-  // Clear routes when not hovering
-  useEffect(() => {
-    if (!hoveredOption) {
-      directionsRenderers.forEach((renderer) => renderer.setMap(null))
-      setDirectionsRenderers([])
-    }
-  }, [hoveredOption])
-
-  if (!isClient) {
-    return (
-      <div className="w-full h-full flex items-center justify-center bg-gray-100">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading...</p>
-        </div>
-      </div>
-    )
-  }
+  }, [searchAddress, isMapReady, showNicoleOffice, handleSearch])
 
   return (
-    <div ref={mapRef} className="w-full h-full bg-gray-100">
-      {!mapLoaded && (
-        <div className="w-full h-full flex items-center justify-center">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-            <p className="text-gray-600">Loading Google Maps...</p>
-          </div>
-        </div>
-      )}
-    </div>
+    <GoogleMapWrapper onLoad={initializeMap} onError={(error) => errorReporter.reportMapError('Wrapper', error)}>
+      <div ref={mapRef} className="w-full h-full bg-gray-100" />
+    </GoogleMapWrapper>
   )
 }
 
@@ -352,11 +334,17 @@ export default function CommutePage() {
   const [isLoading, setIsLoading] = useState(false)
   const [hoveredOption, setHoveredOption] = useState<string | null>(null)
   const [showNicoleOffice, setShowNicoleOffice] = useState(false)
+  const [mapReady, setMapReady] = useState(false)
+
+  // Initialize error reporting
+  useEffect(() => {
+    ErrorReporter.getInstance()
+  }, [])
 
   const handleSearch = () => {
+    if (!searchAddress.trim()) return
     setIsLoading(true)
-    // The actual search is handled by the MapComponent
-    setTimeout(() => setIsLoading(false), 1000)
+    setTimeout(() => setIsLoading(false), 2000) // UI feedback
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -367,14 +355,6 @@ export default function CommutePage() {
 
   const handleToggleDestination = (destination: "grandcentral" | "brookfield") => {
     setShowNicoleOffice(destination === "brookfield")
-  }
-
-  const handleOptionHover = (option: CommuteOption) => {
-    setHoveredOption(option.id)
-  }
-
-  const handleOptionLeave = () => {
-    setHoveredOption(null)
   }
 
   return (
@@ -392,10 +372,15 @@ export default function CommutePage() {
               className="pl-10"
             />
           </div>
-          <Button onClick={handleSearch} disabled={isLoading}>
+          <Button onClick={handleSearch} disabled={isLoading || !mapReady}>
             {isLoading ? "Searching..." : "Search"}
           </Button>
         </div>
+        {!mapReady && (
+          <p className="text-center text-sm text-gray-500 mt-2">
+            Initializing map...
+          </p>
+        )}
       </div>
 
       <div className="flex-1 relative">
@@ -450,8 +435,8 @@ export default function CommutePage() {
                     key={option.id}
                     className={`p-3 rounded-lg border transition-all cursor-pointer ${hoveredOption === option.id ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"
                       }`}
-                    onMouseEnter={() => handleOptionHover(option)}
-                    onMouseLeave={handleOptionLeave}
+                    onMouseEnter={() => setHoveredOption(option.id)}
+                    onMouseLeave={() => setHoveredOption(null)}
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
@@ -495,16 +480,15 @@ export default function CommutePage() {
           </Card>
         )}
 
-        {/* Google Maps */}
-        <DynamicMapComponent
-          searchAddress={searchAddress}
-          commuteOptions={commuteOptions}
-          hoveredOption={hoveredOption}
-          onOptionHover={handleOptionHover}
-          onOptionLeave={handleOptionLeave}
-          showNicoleOffice={showNicoleOffice}
-          onCommuteOptionsUpdate={setCommuteOptions}
-        />
+        {/* Google Maps with Error Boundary */}
+        <ErrorBoundary name="GoogleMaps">
+          <SafeMapComponent
+            searchAddress={searchAddress}
+            onCommuteOptionsUpdate={setCommuteOptions}
+            showNicoleOffice={showNicoleOffice}
+            onMapReady={setMapReady}
+          />
+        </ErrorBoundary>
       </div>
     </div>
   )
