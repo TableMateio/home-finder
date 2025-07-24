@@ -77,18 +77,11 @@ export default function CommutePage() {
 
   // Initialize Google Maps
   useEffect(() => {
-    // Debug logging for environment variables
-    console.log("Environment variables debug:")
-    console.log("NODE_ENV:", process.env.NODE_ENV)
-    console.log("API Key present:", !!process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY)
-    console.log("API Key value:", process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ? "***REDACTED***" : "MISSING")
-
     const loadGoogleMaps = () => {
       // Check if API key is available
       const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
       if (!apiKey) {
         console.error("Google Maps API key is not configured")
-        console.error("All env vars:", Object.keys(process.env).filter(key => key.includes('GOOGLE')))
         return
       }
 
