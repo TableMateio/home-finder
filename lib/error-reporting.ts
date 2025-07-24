@@ -10,7 +10,8 @@ interface ErrorReport {
 
 export class ErrorReporter {
     private static instance: ErrorReporter
-    private webhookUrl = 'https://webhook.site/#!/df8b6c45-7a1b-4c7a-9c2e-8f3d4e5f6a7b/dbe9e7e6-7a5c-4b3d-9e8f-1a2b3c4d5e6f'
+    // Using a real webhook service for monitoring
+    private webhookUrl = 'https://eoxwps6hpxnqb9x.m.pipedream.net'
 
     public static getInstance(): ErrorReporter {
         if (!ErrorReporter.instance) {
@@ -24,6 +25,9 @@ export class ErrorReporter {
         if (typeof window !== 'undefined') {
             window.addEventListener('error', this.handleGlobalError.bind(this))
             window.addEventListener('unhandledrejection', this.handleUnhandledRejection.bind(this))
+
+            // Also log to localStorage as backup
+            console.log('🔍 Error Reporter initialized - all errors will be tracked')
         }
     }
 
@@ -58,8 +62,32 @@ export class ErrorReporter {
             errorInfo: error.errorInfo,
         }
 
-        // Log to console for debugging
-        console.error('Error Report:', report)
+        // Enhanced console logging
+        console.group('🚨 ERROR REPORT')
+        console.error('Message:', report.message)
+        console.error('Stack:', report.stack)
+        console.error('URL:', report.url)
+        console.error('Time:', report.timestamp)
+        if (report.errorInfo) {
+            console.error('Additional Info:', report.errorInfo)
+        }
+        console.groupEnd()
+
+        // Store in localStorage as backup
+        if (typeof window !== 'undefined') {
+            try {
+                const stored = localStorage.getItem('home-finder-errors') || '[]'
+                const errors = JSON.parse(stored)
+                errors.push(report)
+                // Keep only last 10 errors
+                if (errors.length > 10) {
+                    errors.splice(0, errors.length - 10)
+                }
+                localStorage.setItem('home-finder-errors', JSON.stringify(errors))
+            } catch (e) {
+                console.warn('Could not store error in localStorage:', e)
+            }
+        }
 
         // Send to webhook (non-blocking)
         this.sendToWebhook(report).catch(console.error)
@@ -67,15 +95,25 @@ export class ErrorReporter {
 
     private async sendToWebhook(report: ErrorReport) {
         try {
-            await fetch(this.webhookUrl, {
+            const response = await fetch(this.webhookUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(report),
+                body: JSON.stringify({
+                    source: 'Home Finder App',
+                    error: report,
+                    app_url: window.location.href,
+                }),
             })
+
+            if (response.ok) {
+                console.log('✅ Error report sent successfully')
+            } else {
+                console.warn('⚠️ Error report failed to send:', response.status)
+            }
         } catch (error) {
-            console.error('Failed to send error report:', error)
+            console.error('❌ Failed to send error report:', error)
         }
     }
 
@@ -94,5 +132,24 @@ export class ErrorReporter {
             componentStack: errorInfo?.componentStack,
             errorInfo: { componentName, error, errorInfo },
         })
+    }
+
+    // Method to retrieve stored errors for debugging
+    public getStoredErrors(): ErrorReport[] {
+        if (typeof window === 'undefined') return []
+        try {
+            const stored = localStorage.getItem('home-finder-errors') || '[]'
+            return JSON.parse(stored)
+        } catch (e) {
+            return []
+        }
+    }
+
+    // Method to clear stored errors
+    public clearStoredErrors(): void {
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem('home-finder-errors')
+            console.log('🧹 Stored errors cleared')
+        }
     }
 } 
