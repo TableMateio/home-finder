@@ -1,13 +1,26 @@
 "use client"
 
 import type React from "react"
-
+import dynamic from "next/dynamic"
 import { useState, useEffect, useRef } from "react"
 import { Search, Train, Car, Building2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+
+// Dynamically import the map component to prevent SSR issues
+const DynamicMapComponent = dynamic(() => Promise.resolve(MapComponent), {
+  ssr: false,
+  loading: () => (
+    <div className="w-full h-full flex items-center justify-center bg-gray-100">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+        <p className="text-gray-600">Loading Map...</p>
+      </div>
+    </div>
+  )
+})
 
 interface CommuteOption {
   id: string
@@ -22,12 +35,24 @@ interface CommuteOption {
   coordinates: { lat: number; lng: number }
 }
 
-export default function CommutePage() {
-  const [searchAddress, setSearchAddress] = useState("")
-  const [commuteOptions, setCommuteOptions] = useState<CommuteOption[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [hoveredOption, setHoveredOption] = useState<string | null>(null)
-  const [showNicoleOffice, setShowNicoleOffice] = useState(false)
+// Separate map component to isolate Google Maps logic
+function MapComponent({
+  searchAddress,
+  commuteOptions,
+  hoveredOption,
+  onOptionHover,
+  onOptionLeave,
+  showNicoleOffice,
+  onCommuteOptionsUpdate
+}: {
+  searchAddress: string
+  commuteOptions: CommuteOption[]
+  hoveredOption: string | null
+  onOptionHover: (option: CommuteOption) => void
+  onOptionLeave: () => void
+  showNicoleOffice: boolean
+  onCommuteOptionsUpdate: (options: CommuteOption[]) => void
+}) {
   const [map, setMap] = useState<any>(null)
   const [geocoder, setGeocoder] = useState<any>(null)
   const [directionsService, setDirectionsService] = useState<any>(null)
@@ -35,7 +60,7 @@ export default function CommutePage() {
   const [mapLoaded, setMapLoaded] = useState(false)
   const [searchCoordinates, setSearchCoordinates] = useState<{ lat: number; lng: number } | null>(null)
   const [markers, setMarkers] = useState<any[]>([])
-  const [mounted, setMounted] = useState(false)
+  const [isClient, setIsClient] = useState(false)
   const mapRef = useRef<HTMLDivElement>(null)
 
   // Mock data with real Metro North stations
@@ -76,32 +101,27 @@ export default function CommutePage() {
     },
   ]
 
-  // Handle component mounting
+  // Ensure this only runs on client
   useEffect(() => {
-    setMounted(true)
-    return () => setMounted(false)
+    setIsClient(true)
   }, [])
 
-  // Initialize Google Maps
+  // Initialize Google Maps only on client
   useEffect(() => {
-    if (!mounted) return
+    if (!isClient) return
 
     const loadGoogleMaps = () => {
-      // Check if API key is available
       const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
       if (!apiKey) {
         console.error("Google Maps API key is not configured")
         return
       }
 
-      // Check if already loaded
       if (window.google) {
-        // Add a small delay to ensure DOM is ready
         setTimeout(initializeMap, 100)
         return
       }
 
-      // Create script element
       const script = document.createElement("script")
       script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry`
       script.async = true
@@ -109,13 +129,11 @@ export default function CommutePage() {
 
       script.onload = () => {
         console.log("Google Maps API loaded successfully")
-        // Add a small delay to ensure DOM is ready
         setTimeout(initializeMap, 100)
       }
 
       script.onerror = (error) => {
         console.error("Failed to load Google Maps API:", error)
-        console.error("API Key:", apiKey ? "Present" : "Missing")
         setMapLoaded(false)
       }
 
@@ -123,33 +141,15 @@ export default function CommutePage() {
     }
 
     const initializeMap = () => {
-      if (!mapRef.current || !window.google) {
-        console.log("Map ref or Google not available yet")
-        return
-      }
+      if (!mapRef.current || !window.google) return
 
       try {
-        console.log("Initializing Google Maps...")
-
-        // Check if mapRef.current is still a valid DOM element
-        if (!mapRef.current.isConnected) {
-          console.error("Map container is not connected to DOM")
-          return
-        }
-
         const mapInstance = new window.google.maps.Map(mapRef.current, {
-          center: { lat: 40.9176, lng: -73.7004 }, // Westchester County
+          center: { lat: 40.9176, lng: -73.7004 },
           zoom: 10,
           mapTypeControl: true,
           streetViewControl: true,
           fullscreenControl: true,
-          styles: [
-            {
-              featureType: "transit.station.rail",
-              elementType: "labels.icon",
-              stylers: [{ visibility: "on" }],
-            },
-          ],
         })
 
         const geocoderInstance = new window.google.maps.Geocoder()
@@ -168,149 +168,57 @@ export default function CommutePage() {
     }
 
     loadGoogleMaps()
-  }, [mounted])
+  }, [isClient])
 
-  const clearMarkersAndDirections = () => {
-    // Clear existing markers
-    markers.forEach((marker) => marker.setMap(null))
-    setMarkers([])
-
-    // Clear existing directions
-    directionsRenderers.forEach((renderer) => renderer.setMap(null))
-    setDirectionsRenderers([])
-  }
-
-  const geocodeAddress = (address: string): Promise<{ lat: number; lng: number }> => {
-    return new Promise((resolve, reject) => {
-      if (!geocoder) {
-        reject(new Error("Geocoder not initialized"))
-        return
-      }
-
-      geocoder.geocode({ address: address }, (results: any, status: any) => {
-        if (status === "OK" && results[0]) {
-          const location = results[0].geometry.location
-          resolve({
-            lat: location.lat(),
-            lng: location.lng(),
-          })
-        } else {
-          reject(new Error(`Geocoding failed: ${status}`))
-        }
-      })
-    })
-  }
-
-  const calculateDrivingTime = (
-    origin: { lat: number; lng: number },
-    destination: { lat: number; lng: number },
-  ): Promise<number> => {
-    return new Promise((resolve) => {
-      if (!directionsService) {
-        resolve(15) // fallback time
-        return
-      }
-
-      directionsService.route(
-        {
-          origin: origin,
-          destination: destination,
-          travelMode: window.google.maps.TravelMode.DRIVING,
-          unitSystem: window.google.maps.UnitSystem.IMPERIAL,
-          avoidHighways: false,
-          avoidTolls: false,
-        },
-        (result: any, status: any) => {
-          if (status === "OK") {
-            const duration = result.routes[0].legs[0].duration.value / 60 // Convert to minutes
-            resolve(Math.round(duration))
-          } else {
-            resolve(15) // fallback time
-          }
-        },
-      )
-    })
-  }
-
-  const showRouteOnMap = (option: CommuteOption, searchCoords: { lat: number; lng: number }) => {
-    if (!map || !directionsService) {
-      console.warn("Map or directions service not available")
-      return
-    }
-
-    try {
-      // Clear previous directions but keep markers
-      directionsRenderers.forEach((renderer) => renderer.setMap(null))
-      setDirectionsRenderers([])
-
-      // Create driving route to station
-      const drivingRenderer = new window.google.maps.DirectionsRenderer({
-        polylineOptions: {
-          strokeColor: "#4285F4",
-          strokeWeight: 4,
-          strokeOpacity: 0.8,
-        },
-        suppressMarkers: false,
-        markerOptions: {
-          icon: {
-            url:
-              "data:image/svg+xml;charset=UTF-8," +
-              encodeURIComponent(`
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <circle cx="12" cy="12" r="8" fill="#4285F4"/>
-                <path d="M12 8v4l3 3" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-            `),
-            scaledSize: new window.google.maps.Size(20, 20),
-          },
-        },
-      })
-
-      drivingRenderer.setMap(map)
-
-      directionsService.route(
-        {
-          origin: searchCoords,
-          destination: option.coordinates,
-          travelMode: window.google.maps.TravelMode.DRIVING,
-        },
-        (result: any, status: any) => {
-          if (status === "OK") {
-            drivingRenderer.setDirections(result)
-          } else {
-            console.error("Directions request failed:", status)
-          }
-        },
-      )
-
-      setDirectionsRenderers([drivingRenderer])
-    } catch (error) {
-      console.error("Error showing route on map:", error)
-    }
-  }
-
+  // Handle search function
   const handleSearch = async () => {
-    if (!searchAddress.trim()) return
-    if (!mapLoaded || !geocoder) {
-      console.warn("Maps not ready yet")
-      return
-    }
-
-    setIsLoading(true)
+    if (!searchAddress.trim() || !geocoder || !map) return
 
     try {
-      // Geocode the entered address
-      const coordinates = await geocodeAddress(searchAddress)
+      const coordinates = await new Promise<{ lat: number, lng: number }>((resolve, reject) => {
+        geocoder.geocode({ address: searchAddress }, (results: any, status: any) => {
+          if (status === "OK" && results[0]) {
+            const location = results[0].geometry.location
+            resolve({ lat: location.lat(), lng: location.lng() })
+          } else {
+            reject(new Error(`Geocoding failed: ${status}`))
+          }
+        })
+      })
+
       setSearchCoordinates(coordinates)
 
-      // Clear previous markers and directions
-      clearMarkersAndDirections()
+      // Clear previous markers
+      markers.forEach((marker) => marker.setMap(null))
+      setMarkers([])
 
-      // Calculate real driving times to each station
+      // Calculate real driving times
       const updatedOptions = await Promise.all(
         mockCommuteData.map(async (option) => {
           try {
-            const realDriveTime = await calculateDrivingTime(coordinates, option.coordinates)
+            const realDriveTime = await new Promise<number>((resolve) => {
+              if (!directionsService) {
+                resolve(option.driveTime)
+                return
+              }
+
+              directionsService.route(
+                {
+                  origin: coordinates,
+                  destination: option.coordinates,
+                  travelMode: window.google.maps.TravelMode.DRIVING,
+                },
+                (result: any, status: any) => {
+                  if (status === "OK") {
+                    const duration = result.routes[0].legs[0].duration.value / 60
+                    resolve(Math.round(duration))
+                  } else {
+                    resolve(option.driveTime)
+                  }
+                }
+              )
+            })
+
             return {
               ...option,
               driveTime: realDriveTime,
@@ -319,7 +227,6 @@ export default function CommutePage() {
                 : realDriveTime + option.trainTime,
             }
           } catch (error) {
-            console.error(`Error calculating drive time for ${option.station}:`, error)
             return {
               ...option,
               totalTime: showNicoleOffice
@@ -327,73 +234,129 @@ export default function CommutePage() {
                 : option.driveTime + option.trainTime,
             }
           }
-        }),
+        })
       )
 
-      setCommuteOptions(updatedOptions)
+      onCommuteOptionsUpdate(updatedOptions)
 
-      // Add search location marker
-      if (map) {
-        try {
-          const searchMarker = new window.google.maps.Marker({
-            position: coordinates,
+      // Add markers
+      try {
+        const searchMarker = new window.google.maps.Marker({
+          position: coordinates,
+          map: map,
+          title: searchAddress,
+        })
+
+        const stationMarkers = updatedOptions.map((option) => {
+          return new window.google.maps.Marker({
+            position: option.coordinates,
             map: map,
-            title: searchAddress,
-            icon: {
-              url:
-                "data:image/svg+xml;charset=UTF-8," +
-                encodeURIComponent(`
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="#EA4335"/>
-                  <circle cx="12" cy="9" r="2.5" fill="white"/>
-                </svg>
-              `),
-              scaledSize: new window.google.maps.Size(32, 32),
-            },
+            title: `${option.station} Station - ${option.totalTime} min total`,
           })
+        })
 
-          // Add station markers
-          const stationMarkers = updatedOptions.map((option) => {
-            return new window.google.maps.Marker({
-              position: option.coordinates,
-              map: map,
-              title: `${option.station} Station - ${option.totalTime} min total`,
-              icon: {
-                url:
-                  "data:image/svg+xml;charset=UTF-8," +
-                  encodeURIComponent(`
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="12" cy="12" r="10" fill="#1976D2"/>
-                    <path d="M12 6v6l4 2" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-                  </svg>
-                `),
-                scaledSize: new window.google.maps.Size(24, 24),
-              },
-            })
-          })
-
-          setMarkers([searchMarker, ...stationMarkers])
-
-          // Center map on search location
-          map.setCenter(coordinates)
-          map.setZoom(12)
-        } catch (mapError) {
-          console.error("Error adding markers to map:", mapError)
-        }
+        setMarkers([searchMarker, ...stationMarkers])
+        map.setCenter(coordinates)
+        map.setZoom(12)
+      } catch (mapError) {
+        console.error("Error adding markers:", mapError)
       }
     } catch (error) {
       console.error("Error during search:", error)
-      // Fallback to mock data if geocoding fails
-      const updatedOptions = mockCommuteData.map((option) => ({
-        ...option,
-        totalTime: showNicoleOffice
-          ? option.driveTime + option.trainTime + (option.subwayTime || 0)
-          : option.driveTime + option.trainTime,
-      }))
-      setCommuteOptions(updatedOptions)
     }
+  }
 
-    setIsLoading(false)
+  // Auto-search when address changes
+  useEffect(() => {
+    if (searchAddress && mapLoaded) {
+      handleSearch()
+    }
+  }, [searchAddress, mapLoaded, showNicoleOffice])
+
+  // Handle route display
+  useEffect(() => {
+    if (!hoveredOption || !searchCoordinates || !map || !directionsService) return
+
+    const option = commuteOptions.find(opt => opt.id === hoveredOption)
+    if (!option) return
+
+    try {
+      directionsRenderers.forEach((renderer) => renderer.setMap(null))
+      setDirectionsRenderers([])
+
+      const drivingRenderer = new window.google.maps.DirectionsRenderer({
+        polylineOptions: {
+          strokeColor: "#4285F4",
+          strokeWeight: 4,
+          strokeOpacity: 0.8,
+        },
+      })
+
+      drivingRenderer.setMap(map)
+
+      directionsService.route(
+        {
+          origin: searchCoordinates,
+          destination: option.coordinates,
+          travelMode: window.google.maps.TravelMode.DRIVING,
+        },
+        (result: any, status: any) => {
+          if (status === "OK") {
+            drivingRenderer.setDirections(result)
+          }
+        }
+      )
+
+      setDirectionsRenderers([drivingRenderer])
+    } catch (error) {
+      console.error("Error showing route:", error)
+    }
+  }, [hoveredOption, searchCoordinates, commuteOptions, map, directionsService])
+
+  // Clear routes when not hovering
+  useEffect(() => {
+    if (!hoveredOption) {
+      directionsRenderers.forEach((renderer) => renderer.setMap(null))
+      setDirectionsRenderers([])
+    }
+  }, [hoveredOption])
+
+  if (!isClient) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-gray-100">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div ref={mapRef} className="w-full h-full bg-gray-100">
+      {!mapLoaded && (
+        <div className="w-full h-full flex items-center justify-center">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <p className="text-gray-600">Loading Google Maps...</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function CommutePage() {
+  const [searchAddress, setSearchAddress] = useState("")
+  const [commuteOptions, setCommuteOptions] = useState<CommuteOption[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [hoveredOption, setHoveredOption] = useState<string | null>(null)
+  const [showNicoleOffice, setShowNicoleOffice] = useState(false)
+
+  const handleSearch = () => {
+    setIsLoading(true)
+    // The actual search is handled by the MapComponent
+    setTimeout(() => setIsLoading(false), 1000)
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -403,32 +366,15 @@ export default function CommutePage() {
   }
 
   const handleToggleDestination = (destination: "grandcentral" | "brookfield") => {
-    const isNicoleOffice = destination === "brookfield"
-    setShowNicoleOffice(isNicoleOffice)
-
-    if (commuteOptions.length > 0) {
-      const updatedOptions = commuteOptions.map((option) => ({
-        ...option,
-        totalTime: isNicoleOffice
-          ? option.driveTime + option.trainTime + (option.subwayTime || 0)
-          : option.driveTime + option.trainTime,
-      }))
-      setCommuteOptions(updatedOptions)
-    }
+    setShowNicoleOffice(destination === "brookfield")
   }
 
   const handleOptionHover = (option: CommuteOption) => {
     setHoveredOption(option.id)
-    if (searchCoordinates) {
-      showRouteOnMap(option, searchCoordinates)
-    }
   }
 
   const handleOptionLeave = () => {
     setHoveredOption(null)
-    // Clear directions but keep markers
-    directionsRenderers.forEach((renderer) => renderer.setMap(null))
-    setDirectionsRenderers([])
   }
 
   return (
@@ -446,7 +392,7 @@ export default function CommutePage() {
               className="pl-10"
             />
           </div>
-          <Button onClick={handleSearch} disabled={isLoading || !mapLoaded}>
+          <Button onClick={handleSearch} disabled={isLoading}>
             {isLoading ? "Searching..." : "Search"}
           </Button>
         </div>
@@ -473,7 +419,6 @@ export default function CommutePage() {
                 </CardTitle>
               </div>
 
-              {/* Icon Toggle */}
               <div className="flex items-center gap-1 mb-2 bg-gray-100 rounded-lg p-1">
                 <Button
                   variant={!showNicoleOffice ? "default" : "ghost"}
@@ -532,7 +477,6 @@ export default function CommutePage() {
                           <Building2 className="h-3 w-3" />+{option.subwayTime}m subway
                         </div>
                       )}
-                      {option.walkingDistance && <div className="text-xs">{option.walkingDistance}mi walk</div>}
                     </div>
 
                     <div className="text-xs">
@@ -552,19 +496,15 @@ export default function CommutePage() {
         )}
 
         {/* Google Maps */}
-        <div ref={mapRef} className="w-full h-full bg-gray-100">
-          {!mapLoaded && (
-            <div className="w-full h-full flex items-center justify-center">
-              <div className="text-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
-                <p className="text-gray-600">Loading Google Maps...</p>
-                <p className="text-sm text-gray-400 mt-1">
-                  API Key: {process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ? 'Configured' : 'Missing'}
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
+        <DynamicMapComponent
+          searchAddress={searchAddress}
+          commuteOptions={commuteOptions}
+          hoveredOption={hoveredOption}
+          onOptionHover={handleOptionHover}
+          onOptionLeave={handleOptionLeave}
+          showNicoleOffice={showNicoleOffice}
+          onCommuteOptionsUpdate={setCommuteOptions}
+        />
       </div>
     </div>
   )
