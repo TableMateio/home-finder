@@ -78,6 +78,13 @@ export default function CommutePage() {
   // Initialize Google Maps
   useEffect(() => {
     const loadGoogleMaps = () => {
+      // Check if API key is available
+      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
+      if (!apiKey) {
+        console.error("Google Maps API key is not configured")
+        return
+      }
+
       // Check if already loaded
       if (window.google) {
         initializeMap()
@@ -86,7 +93,7 @@ export default function CommutePage() {
 
       // Create script element
       const script = document.createElement("script")
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=places,geometry`
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,geometry`
       script.async = true
       script.defer = true
 
@@ -97,6 +104,7 @@ export default function CommutePage() {
 
       script.onerror = (error) => {
         console.error("Failed to load Google Maps API:", error)
+        console.error("API Key:", apiKey ? "Present" : "Missing")
       }
 
       document.head.appendChild(script)
